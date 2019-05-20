@@ -309,3 +309,75 @@ impl DeviceManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::device::*;
+    use crate::device_manager::*;
+    use std::string::String;
+
+    #[test]
+    fn test_dev_init() -> Result<()> {
+        pub struct BusDevice {
+            pub config_address: u32,
+            pub name: String,
+        }
+        impl Device for BusDevice {
+            /// Get the device name.
+            fn name(&self) -> String {
+                self.name.clone()
+            }
+            /// Read operation.
+            fn read(&mut self, _addr: GuestAddress, data: &mut [u8], _io_type: IoType) {
+                if data.len() > 4 {
+                    for d in data {
+                        *d = 0xff;
+                    }
+                    return;
+                }
+                for (idx, iter) in data.iter_mut().enumerate() {
+                    *iter = (self.config_address >> (idx * 8) & 0xff) as u8;
+                }
+            }
+            /// Write operation.
+            fn write(&mut self, _addr: GuestAddress, data: &[u8], _io_type: IoType) {
+                self.config_address = u32::from(data[0]) & 0xff;
+            }
+            /// Set the allocated resource to device.
+            ///
+            /// This will be called by DeviceManager::register_device() to set
+            /// the allocated resource from the vm_allocator back to device.
+            fn set_resources(&mut self, _res: &[Resource]) {}
+        }
+        impl BusDevice {
+            pub fn new(name: String) -> Self {
+                BusDevice {
+                    name,
+                    config_address: 0x1000,
+                }
+            }
+            pub fn get_resource(&self) -> Vec<Resource> {
+                let mut req_vec = Vec::new();
+                let res = Resource::new(Some(GuestAddress(0xcf8)), 8 as GuestUsize, IoType::Pio);
+
+                req_vec.push(res);
+                req_vec
+            }
+        }
+
+        let sys_res = SystemAllocator::new(
+            Some(GuestAddress(0x100)),
+            Some(0x10000),
+            GuestAddress(0x1000_0000),
+            0x1000_0000,
+            5,
+        )
+        .unwrap();
+        let mut dev_mgr = DeviceManager::new(Arc::new(Mutex::new(sys_res)));
+        let dummy_bus = BusDevice::new("dummy-bus".to_string());
+        let mut res_req = dummy_bus.get_resource();
+
+        dev_mgr.register_device(Arc::new(Mutex::new(dummy_bus)), None, &mut res_req)
+    }
+
+}
