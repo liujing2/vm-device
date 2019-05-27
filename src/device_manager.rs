@@ -52,6 +52,8 @@ pub enum Error {
     Exist,
     /// The removing fails because the device doesn't exist.
     NonExist,
+    /// IRQ allocated failed.
+    AllocateIrq,
 }
 
 /// Simplify the `Result` type.
@@ -99,9 +101,10 @@ impl DeviceManager {
         dev: Arc<Mutex<dyn Device>>,
         parent_bus: Option<Arc<Mutex<dyn Device>>>,
         resources: Vec<IoResource>,
+        irq: Option<IrqResource>,
     ) -> DeviceDescriptor {
         let name = dev.lock().expect("failed to acquire lock").name();
-        DeviceDescriptor::new(name, dev.clone(), parent_bus, resources)
+        DeviceDescriptor::new(name, dev.clone(), parent_bus, resources, irq)
     }
 
     fn allocate_resources(&mut self, resources: &mut Vec<IoResource>) -> Result<()> {
@@ -192,12 +195,39 @@ impl DeviceManager {
         Ok(())
     }
 
+    fn allocate_irq_resource(
+        &mut self,
+        interrupt: Option<IrqResource>,
+    ) -> Result<Option<IrqResource>> {
+        match interrupt {
+            Some(IrqResource(irq)) => {
+                match irq {
+                    // TODO: Return Error when requesting a specified irq resource
+                    Some(_) => {
+                        Err(Error::AllocateIrq)
+                    }
+                    // Allocate irq resource
+                    None => {
+                        let irq_num = self
+                            .resource
+                            .lock()
+                            .expect("failed to acquire lock")
+                            .allocate_irq();
+                        Ok(Some(IrqResource(irq_num)))
+                    }
+                }
+            }
+            None => Ok(None)
+        }
+    }
+
     /// Register a new device with its parent bus and resources request set.
     pub fn register_device(
         &mut self,
         dev: Arc<Mutex<dyn Device>>,
         parent_bus: Option<Arc<Mutex<dyn Device>>>,
         resources: &mut Vec<IoResource>,
+        interrupt: Option<IrqResource>,
     ) -> Result<()> {
         // Reserve resources
         if let Err(e) = self.allocate_resources(resources) {
@@ -209,13 +239,16 @@ impl DeviceManager {
             return Err(Error::Overlap);
         }
 
-        // Set the allocated resources back
+        let irq = self.allocate_irq_resource(interrupt)?;
+
+        // Set the allocated resource back
         dev.lock()
-            .expect("failed to acquire lock.")
-            .set_resources(resources);
+            .expect("Failed to acquire lock.")
+            .set_resources(resources, irq);
+
+        let descriptor = self.device_descriptor(dev, parent_bus, resources.to_vec(), irq);
 
         // Insert bus/device to DeviceManager with parent bus
-        let descriptor = self.device_descriptor(dev, parent_bus, resources.to_vec());
         self.insert(descriptor)
     }
 
