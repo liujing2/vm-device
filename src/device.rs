@@ -19,10 +19,10 @@ pub trait Device: Send {
     ///
     /// This will be called by DeviceManager::register_device() to set
     /// the allocated resource from the vm_allocator back to device.
-    fn set_resources(&mut self, res: &[Resource]);
+    fn set_resources(&mut self, res: &[IoResource]);
 }
 
-/// Resource type.
+/// IO Resource type.
 #[derive(Debug, Copy, Clone)]
 pub enum IoType {
     /// Port I/O resource.
@@ -35,7 +35,7 @@ pub enum IoType {
 
 /// Device resource information.
 #[derive(Debug, Copy, Clone)]
-pub struct Resource {
+pub struct IoResource {
     /// Resource address.
     pub addr: Option<GuestAddress>,
     /// Resource size.
@@ -44,10 +44,10 @@ pub struct Resource {
     pub res_type: IoType,
 }
 
-impl Resource {
+impl IoResource {
     /// Build a Resource struct.
-    pub fn new(addr: Option<GuestAddress>, size: GuestUsize, res_type: IoType) -> Resource {
-        Resource {
+    pub fn new(addr: Option<GuestAddress>, size: GuestUsize, res_type: IoType) -> IoResource {
+        IoResource {
             addr,
             size,
             res_type,
@@ -64,7 +64,7 @@ pub struct DeviceDescriptor {
     /// The parent bus of this device.
     pub parent_bus: Option<Arc<Mutex<dyn Device>>>,
     /// Device resource set.
-    pub resources: Vec<Resource>,
+    pub resources: Vec<IoResource>,
 }
 
 impl DeviceDescriptor {
@@ -73,7 +73,7 @@ impl DeviceDescriptor {
         name: String,
         dev: Arc<Mutex<dyn Device>>,
         parent_bus: Option<Arc<Mutex<dyn Device>>>,
-        resources: Vec<Resource>,
+        resources: Vec<IoResource>,
     ) -> Self {
         DeviceDescriptor {
             name,
