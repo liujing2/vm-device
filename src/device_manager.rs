@@ -380,7 +380,7 @@ mod tests {
             ///
             /// This will be called by DeviceManager::register_device() to set
             /// the allocated resource from the vm_allocator back to device.
-            fn set_resources(&mut self, _res: &[IoResource]) {}
+            fn set_resources(&mut self, _res: &[IoResource], _irq: Option<IrqResource>) {}
         }
         impl BusDevice {
             pub fn new(name: String) -> Self {
@@ -410,7 +410,12 @@ mod tests {
         let dummy_bus = BusDevice::new("dummy-bus".to_string());
         let mut res_req = dummy_bus.get_resource();
 
-        dev_mgr.register_device(Arc::new(Mutex::new(dummy_bus)), None, &mut res_req)
+        dev_mgr.register_device(
+            Arc::new(Mutex::new(dummy_bus)),
+            None,
+            &mut res_req,
+            Some(IrqResource(None)),
+        )
     }
 
 }
