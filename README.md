@@ -51,7 +51,7 @@ refactors those project implementations as follows:
 
 The `DeviceManager` keeps track of all registered devices. Each device is
 optionally linked to a parent bus and will typically register a set of IO
-related resources.
+related resources and IRQ resource.
 All devices are added to an internal hash map indexed by the device name.
 
 As the `DeviceManager` keeps track of devices relations between each others,
@@ -123,18 +123,19 @@ impl Device for DummyDevice {
         self.config_address = data[0] as u32 & 0xff;
     }
 
-    fn set_resources(&mut self, _res: &[Resource]) {}
+    fn set_resources(&mut self, _res: &[IoResource], _irq: Option<IrqResource>) {}
 }
 
 /// Now we can register a DummyDevice against the DeviceManager
 
 /// First we need a PIO resource for it.
 let mut resources_vec = Vec::new();
-let res = Resource::new(Some(GuestAddress(0xcf8)), 8 as GuestUsize, IoType::Pio);
+let res = IoResource::new(Some(GuestAddress(0xcf8)), 8 as GuestUsize, IoType::Pio);
 resources.push(res);
 
+/// Register with the request of IO resource and IRQ resource.
 let dummy = DummyDevice{config_address: 0x1000,};
-device_manager.register_device(Arc::new(Mutex::new(dummy)), None, &mut resources);
+device_manager.register_device(Arc::new(Mutex::new(dummy)), None, &mut resources, Some(IrqResource(None)));
 ```
 
 The VMM will then call the `DeviceManager` instance to handle VM exits:
