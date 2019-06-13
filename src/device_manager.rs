@@ -65,8 +65,8 @@ pub type Result<T> = result::Result<T, Error>;
 pub struct DeviceManager {
     /// System allocator reference.
     resource: Arc<Mutex<SystemAllocator>>,
-    /// Devices information mapped by name.
-    devices: HashMap<String, DeviceDescriptor>,
+    /// Devices information mapped by instance id.
+    devices: HashMap<u32, DeviceDescriptor>,
     /// Range mapping for VM exit mmio operations.
     mmio_bus: BTreeMap<Range, Arc<Mutex<dyn Device>>>,
     /// Range mapping for VM exit pio operations.
@@ -87,30 +87,39 @@ impl DeviceManager {
 
     fn insert(&mut self, dev: DeviceDescriptor) -> Result<()> {
         // Insert if the key is non-present, else report error.
-        if self.devices.get(&(dev.name)).is_some() {
+        if self.devices.get(&(dev.instance_id)).is_some() {
             return Err(Error::Exist);
         }
-        self.devices.insert(dev.name.clone(), dev);
+        self.devices.insert(dev.instance_id, dev);
         Ok(())
     }
 
-    fn remove(&mut self, name: String) -> Option<DeviceDescriptor> {
-        self.devices.remove(&name)
+    fn remove(&mut self, instance_id: u32) -> Option<DeviceDescriptor> {
+        self.devices.remove(&instance_id)
     }
 
     fn device_descriptor(
         &self,
+        id: u32,
+        name: String,
         dev: Arc<Mutex<dyn Device>>,
         parent_bus: Option<Arc<Mutex<dyn Device>>>,
         resources: Vec<IoResource>,
         irq: Option<IrqResource>,
     ) -> DeviceDescriptor {
-        let name = dev.lock().expect("failed to acquire lock").name();
-        DeviceDescriptor::new(name, dev.clone(), parent_bus, resources, irq)
+        DeviceDescriptor::new(id, name, dev.clone(), parent_bus, resources, irq)
     }
 
-    fn allocate_resources(&mut self, resources: &mut Vec<IoResource>) -> Result<()> {
+    // Allocate IO and instance id resources.
+    // Return a Result wrapper of instance id.
+    fn allocate_resources(&mut self, resources: &mut Vec<IoResource>) -> Result<(u32)> {
         let mut alloc_idx = 0;
+        let id = self
+            .resource
+            .lock()
+            .expect("failed to acquire lock.")
+            .allocate_instance_id()
+            .map_err(Error::InstanceIdAllocate)?;
 
         for res in resources.iter_mut() {
             match res.res_type {
@@ -141,7 +150,7 @@ impl DeviceManager {
 
         // Successfully allocate.
         if alloc_idx == resources.len() {
-            return Ok(());
+            return Ok(id);
         }
 
         // Failed and free the previous resources.
@@ -225,15 +234,14 @@ impl DeviceManager {
         interrupt: Option<IrqResource>,
     ) -> Result<()> {
         // Reserve resources
-        if let Err(e) = self.allocate_resources(resources) {
-            return Err(e);
-        }
+        let id = self.allocate_resources(resources)?;
 
         // Register device resources
         if let Err(Error::Overlap) = self.register_resources(dev.clone(), resources) {
             return Err(Error::Overlap);
         }
 
+        let name = dev.lock().expect("failed to acquire lock.").name();
         let irq = self.allocate_irq_resource(interrupt)?;
 
         // Set the allocated resource back
@@ -241,17 +249,15 @@ impl DeviceManager {
             .expect("Failed to acquire lock.")
             .set_resources(resources, irq);
 
-        let descriptor = self.device_descriptor(dev, parent_bus, resources.to_vec(), irq);
+        let descriptor = self.device_descriptor(id, name, dev, parent_bus, resources.to_vec(), irq);
 
         // Insert bus/device to DeviceManager with parent bus
         self.insert(descriptor)
     }
 
     /// Unregister a device from `DeviceManager`.
-    pub fn unregister_device(&mut self, dev: Arc<Mutex<dyn Device>>) -> Result<()> {
-        let name = dev.lock().expect("failed to acquire lock").name();
-
-        if let Some(descriptor) = self.remove(name) {
+    pub fn unregister_device(&mut self, instance_id: u32) -> Result<()> {
+        if let Some(descriptor) = self.remove(instance_id) {
             for res in descriptor.resources.iter() {
                 if res.addr.is_some() {
                     match res.res_type {
@@ -353,7 +359,7 @@ mod tests {
         impl Device for BusDevice {
             /// Get the device name.
             fn name(&self) -> String {
-                self.name.clone()
+                "PciBus".to_string()
             }
             /// Read operation.
             fn read(&mut self, _addr: GuestAddress, data: &mut [u8], _io_type: IoType) {
@@ -414,5 +420,4 @@ mod tests {
             Some(IrqResource(None)),
         )
     }
-
 }

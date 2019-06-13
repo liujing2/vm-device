@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0 AND BSD-3-Clause
 
 //! Handles routing to devices in an address space.
-use std::string::String;
 use std::sync::{Arc, Mutex};
 use vm_memory::{GuestAddress, GuestUsize};
 
@@ -59,9 +58,11 @@ impl IoResource {
 #[derive(Debug, Copy, Clone)]
 pub struct IrqResource(pub Option<u32>);
 
-/// Storing Device information and for topology managing by name.
+/// Storing Device information and for topology managing.
 pub struct DeviceDescriptor {
-    /// Device name.
+    /// Device instance id information.
+    pub instance_id: u32,
+    /// Device type name.
     pub name: String,
     /// The device to descript.
     pub device: Arc<Mutex<dyn Device>>,
@@ -76,6 +77,7 @@ pub struct DeviceDescriptor {
 impl DeviceDescriptor {
     /// Create a descriptor for one device.
     pub fn new(
+        instance_id: u32,
         name: String,
         dev: Arc<Mutex<dyn Device>>,
         parent_bus: Option<Arc<Mutex<dyn Device>>>,
@@ -83,6 +85,7 @@ impl DeviceDescriptor {
         irq: Option<IrqResource>,
     ) -> Self {
         DeviceDescriptor {
+            instance_id,
             name,
             device: dev,
             parent_bus,
