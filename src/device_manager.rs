@@ -10,7 +10,7 @@
 
 extern crate vm_allocator;
 
-use self::vm_allocator::SystemAllocator;
+use self::vm_allocator::{Error as AllocatorError, SystemAllocator};
 use crate::device::*;
 use std::cmp::{Ord, Ordering, PartialEq, PartialOrd};
 use std::collections::btree_map::BTreeMap;
@@ -52,8 +52,10 @@ pub enum Error {
     Exist,
     /// The removing fails because the device doesn't exist.
     NonExist,
-    /// IRQ allocated failed.
-    AllocateIrq,
+    /// Irq allocation failed.
+    IrqAllocate(AllocatorError),
+    /// Instance id allocation failed.
+    InstanceIdAllocate(AllocatorError),
 }
 
 /// Simplify the `Result` type.
@@ -201,23 +203,16 @@ impl DeviceManager {
     ) -> Result<Option<IrqResource>> {
         match interrupt {
             Some(IrqResource(irq)) => {
-                match irq {
-                    // TODO: Return Error when requesting a specified irq resource
-                    Some(_) => {
-                        Err(Error::AllocateIrq)
-                    }
-                    // Allocate irq resource
-                    None => {
-                        let irq_num = self
-                            .resource
-                            .lock()
-                            .expect("failed to acquire lock")
-                            .allocate_irq();
-                        Ok(Some(IrqResource(irq_num)))
-                    }
-                }
+                // Allocate irq resource
+                let irq_num = self
+                    .resource
+                    .lock()
+                    .expect("failed to acquire lock")
+                    .allocate_irq(irq)
+                    .map_err(Error::IrqAllocate)?;
+                Ok(Some(IrqResource(Some(irq_num))))
             }
-            None => Ok(None)
+            None => Ok(None),
         }
     }
 
@@ -404,6 +399,8 @@ mod tests {
             GuestAddress(0x1000_0000),
             0x1000_0000,
             5,
+            15,
+            1,
         )
         .unwrap();
         let mut dev_mgr = DeviceManager::new(Arc::new(Mutex::new(sys_res)));
