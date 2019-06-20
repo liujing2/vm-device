@@ -154,11 +154,11 @@ impl DeviceManager {
         }
 
         // Failed and free the previous resources.
-        self.free_resources(&resources[0..alloc_idx]);
+        self.free_resources(&resources[0..alloc_idx], id);
         Err(Error::Overlap)
     }
 
-    fn free_resources(&mut self, resources: &[IoResource]) {
+    fn free_resources(&mut self, resources: &[IoResource], id: u32) {
         for res in resources.iter() {
             match res.res_type {
                 IoType::Pio => self
@@ -173,6 +173,10 @@ impl DeviceManager {
                     .free_mmio_addresses(res.addr.unwrap(), res.size),
             }
         }
+        self.resource
+            .lock()
+            .expect("failed to acquire lock")
+            .free_instance_id(id);
     }
 
     fn register_resources(
@@ -225,6 +229,17 @@ impl DeviceManager {
         }
     }
 
+    fn free_irq_resource(&mut self, interrupt: Option<IrqResource>) {
+        match interrupt {
+            Some(IrqResource(irq)) => self
+                .resource
+                .lock()
+                .expect("failed to acquire lock")
+                .free_irq(irq),
+            None => return,
+        }
+    }
+
     /// Register a new device with its parent bus and resources request set.
     pub fn register_device(
         &mut self,
@@ -268,7 +283,8 @@ impl DeviceManager {
                 }
             }
             // Free the resources
-            self.free_resources(&descriptor.resources);
+            self.free_resources(&descriptor.resources, instance_id);
+            self.free_irq_resource(descriptor.irq);
             Ok(())
         } else {
             Err(Error::NonExist)
