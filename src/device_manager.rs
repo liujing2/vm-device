@@ -56,6 +56,8 @@ pub enum Error {
     IrqAllocate(AllocatorError),
     /// Instance id allocation failed.
     InstanceIdAllocate(AllocatorError),
+    /// Address allocation failed.
+    AddressAllocate(AllocatorError),
 }
 
 /// Simplify the `Result` type.
@@ -113,7 +115,6 @@ impl DeviceManager {
     // Allocate IO and instance id resources.
     // Return a Result wrapper of instance id.
     fn allocate_resources(&mut self, resources: &mut Vec<IoResource>) -> Result<(u32)> {
-        let mut alloc_idx = 0;
         let id = self
             .resource
             .lock()
@@ -127,35 +128,26 @@ impl DeviceManager {
                     if res.addr.is_none() {
                         return Err(Error::NonePIORequest);
                     }
-                    res.addr = self
-                        .resource
-                        .lock()
-                        .expect("failed to acquire lock")
-                        .allocate_io_addresses(res.addr.unwrap(), res.size);
+                    res.addr = Some(
+                        self.resource
+                            .lock()
+                            .expect("failed to acquire lock")
+                            .allocate_io_addresses(res.addr.unwrap(), res.size)
+                            .map_err(Error::AddressAllocate)?,
+                    );
                 }
                 IoType::PhysicalMmio | IoType::Mmio => {
-                    res.addr = self
-                        .resource
-                        .lock()
-                        .expect("failed to acquire lock")
-                        .allocate_mmio_addresses(res.addr, res.size)
+                    res.addr = Some(
+                        self.resource
+                            .lock()
+                            .expect("failed to acquire lock")
+                            .allocate_mmio_addresses(res.addr, res.size)
+                            .map_err(Error::AddressAllocate)?,
+                    )
                 }
             }
-            if res.addr.is_none() {
-                // Failed to allocate resource.
-                break;
-            }
-            alloc_idx += 1;
         }
-
-        // Successfully allocate.
-        if alloc_idx == resources.len() {
-            return Ok(id);
-        }
-
-        // Failed and free the previous resources.
-        self.free_resources(&resources[0..alloc_idx], id);
-        Err(Error::Overlap)
+        Ok(id)
     }
 
     fn free_resources(&mut self, resources: &[IoResource], id: u32) {
