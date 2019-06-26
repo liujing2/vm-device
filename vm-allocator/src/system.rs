@@ -13,6 +13,7 @@ use crate::address::AddressAllocator;
 use crate::id::IdAllocator;
 
 use libc::{sysconf, _SC_PAGESIZE};
+use std::fmt::{self, Display};
 use std::result;
 use std::sync::{Arc, Mutex};
 
@@ -29,6 +30,21 @@ pub enum Error {
     AllocateIrq(crate::id::Error),
     /// Instance id allocation failed.
     AllocateInstanceId(crate::id::Error),
+}
+
+impl Display for Error {
+    // This trait requires `fmt` with this exact signature.
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::Error::*;
+
+        match self {
+            UndefinedAddress => write!(f, "Cannot allocate address. The address being allocated is undefined."),
+            AllocateMmioAddress(e) => write!(f, "Cannot allocate mmio address, err={}", e),
+            AllocatePioAddress(e) => write!(f, "Cannot allocate port IO address, err={}", e),
+            AllocateIrq(e) => write!(f, "Cannot allocate irq, err={}", e),
+            AllocateInstanceId(e) => write!(f, "Cannot allocate instance id, err={}", e),
+        }
+    }
 }
 
 pub type Result<T> = result::Result<T, Error>;
