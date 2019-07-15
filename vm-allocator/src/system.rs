@@ -7,207 +7,87 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR BSD-3-Clause
 
-use vm_memory::{GuestAddress, GuestUsize};
+use crate::resource::*;
+use crate::id::Id;
 
-use crate::address::AddressAllocator;
-use crate::id::IdAllocator;
-
-use libc::{sysconf, _SC_PAGESIZE};
-use std::fmt::{self, Display};
+use std::collections::HashMap;
 use std::result;
-use std::sync::{Arc, Mutex};
 
 /// Errors associated with system resources allocation.
 #[derive(Debug)]
 pub enum Error {
-    /// The address request is undefined.
-    UndefinedAddress,
-    /// Mmio address allocation failed.
-    AllocateMmioAddress(crate::address::Error),
-    /// Port IO address allocation failed.
-    AllocatePioAddress(crate::address::Error),
-    /// Irq allocation failed.
-    AllocateIrq(crate::id::Error),
-    /// Instance id allocation failed.
-    AllocateInstanceId(crate::id::Error),
-}
-
-impl Display for Error {
-    // This trait requires `fmt` with this exact signature.
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use self::Error::*;
-
-        match self {
-            UndefinedAddress => write!(f, "Cannot allocate address. The address being allocated is undefined."),
-            AllocateMmioAddress(e) => write!(f, "Cannot allocate mmio address, err={}", e),
-            AllocatePioAddress(e) => write!(f, "Cannot allocate port IO address, err={}", e),
-            AllocateIrq(e) => write!(f, "Cannot allocate irq, err={}", e),
-            AllocateInstanceId(e) => write!(f, "Cannot allocate instance id, err={}", e),
-        }
-    }
+    /// The allocator already exists.
+    Exist,
 }
 
 pub type Result<T> = result::Result<T, Error>;
 
-/// Safe wrapper for `sysconf(_SC_PAGESIZE)`.
-#[inline(always)]
-fn pagesize() -> usize {
-    // Trivially safe
-    unsafe { sysconf(_SC_PAGESIZE) as usize }
-}
-
-/// Manages allocating system resources such as address space, device instance id and interrupt numbers.
+/// SystemAllocator contains different kinds of resources on demands of vmm.
 ///
-/// # Example - Use the `SystemAddress` builder.
+/// vmm needs create a callback function and store it inside
+/// vm-device::DeviceManager so it can be used to allocate each resource.
+/// # Example
 ///
-/// ```
-/// # use vm_allocator::SystemAllocator;
-/// # use vm_memory::{Address, GuestAddress, GuestUsize};
-///   let mut allocator = SystemAllocator::new(
-///           Some(GuestAddress(0x1000)), Some(0x10000),
-///           GuestAddress(0x10000000), 0x10000000,
-///           5, 24, 1).unwrap();
-///    assert_eq!(allocator.allocate_irq(None).unwrap(), 5);
-///    assert_eq!(allocator.allocate_irq(Some(7)).unwrap(), 7);
-///    assert_eq!(allocator.allocate_mmio_addresses(None, 0x1000).unwrap(), GuestAddress(0x1ffff000));
+/// let allocate_cb = Arc::new(Box::new(sys: SystemAllocator, res: Box<IdResourceAllocator>) -> Result<Box<IdResourceAllocator>> {
+///     sys.find_allocator(res.name()).allocate_id()
+/// }
+/// ));
+/// vm-device::DeviceManager::assign_allocate_cb(allocate_cb);
 ///
-/// ```
-#[derive(Clone)]
+#[derive(Default)]
 pub struct SystemAllocator {
-    io_address_space: Arc<Mutex<Option<AddressAllocator>>>,
-    mmio_address_space: Arc<Mutex<AddressAllocator>>,
-    irq: Arc<Mutex<IdAllocator>>,
-    instance_id: Arc<Mutex<IdAllocator>>,
+    // Different types of address as vmm request
+    addr_alloc: HashMap<String, Box<AddrResourceAllocator>>,
+    // Instance id and irq as different vmm request
+    id_alloc: HashMap<String, Box<IdResourceAllocator>>,
 }
 
 impl SystemAllocator {
-    /// Creates a new `SystemAllocator` for managing addresses, device instance id and irq numbers.
-    ///
-    /// * `io_base` - The starting address of IO memory.
-    /// * `io_size` - The size of IO memory.
-    /// * `mmio_base` - The starting address of MMIO memory.
-    /// * `mmio_size` - The size of MMIO memory.
-    /// * `first_irq` - The first irq number to give out.
-    /// * `last_irq` - The last irq number to give out.
-    /// * `first_instance_id` - The first device instance id to give out.
-    pub fn new(
-        io_base: Option<GuestAddress>,
-        io_size: Option<GuestUsize>,
-        mmio_base: GuestAddress,
-        mmio_size: GuestUsize,
-        first_irq: u32,
-        last_irq: u32,
-        first_instance_id: u32,
-    ) -> Option<Self> {
-        let page_size = pagesize() as u64;
-        Some(SystemAllocator {
-            io_address_space: if let (Some(b), Some(s)) = (io_base, io_size) {
-                Arc::new(Mutex::new(Some(AddressAllocator::new(b, s, Some(0x1))?)))
-            } else {
-                Arc::new(Mutex::new(None))
-            },
-            mmio_address_space: Arc::new(Mutex::new(AddressAllocator::new(
-                mmio_base,
-                mmio_size,
-                Some(page_size),
-            )?)),
-            irq: Arc::new(Mutex::new(IdAllocator::new(first_irq, last_irq)?)),
-            instance_id: Arc::new(Mutex::new(IdAllocator::new(
-                first_instance_id,
-                u32::max_value(),
-            )?)),
-        })
-    }
-
-    /// Reserves the next available system irq number.
-    /// * `irq` - A specific value trying to allocate, or None means no specific value.
-    pub fn allocate_irq(&mut self, irq: Option<u32>) -> Result<u32> {
-        self.irq
-            .lock()
-            .expect("failed to acquire lock")
-            .allocate(irq)
-            .map_err(Error::AllocateIrq)
-    }
-
-    /// Reserves the next available system device instance id number.
-    pub fn allocate_instance_id(&mut self) -> Result<u32> {
-        self.instance_id
-            .lock()
-            .expect("failed to acquire lock")
-            .allocate(None)
-            .map_err(Error::AllocateInstanceId)
-    }
-
-    /// Free an interrupt number.
-    /// Only free an `irq` if it matches exactly an already allocated one.
-    pub fn free_irq(&mut self, irq: Option<u32>) {
-        match irq {
-            Some(i) => self.irq.lock().expect("failed to acquire lock").free(i),
-            None => return,
+    pub fn new() -> Self {
+        SystemAllocator {
+            addr_alloc: HashMap::new(),
+            id_alloc: HashMap::new(),
         }
     }
 
-    /// Free an instance id.
-    /// Only free an `id` if it matches exactly an already allocated one.
-    pub fn free_instance_id(&mut self, id: u32) {
-        self.instance_id
-            .lock()
-            .expect("failed to acquire lock")
-            .free(id);
-    }
-
-    /// Reserves a section of `size` bytes of IO address space.
-    pub fn allocate_io_addresses(
-        &mut self,
-        address: GuestAddress,
-        size: GuestUsize,
-    ) -> Result<GuestAddress> {
-        if let Some(io_address) = self
-            .io_address_space
-            .lock()
-            .expect("failed to acquire lock")
-            .as_mut()
-        {
-            io_address
-                .allocate(Some(address), size)
-                .map_err(Error::AllocatePioAddress)
-        } else {
-            Err(Error::UndefinedAddress)
+    pub fn add_addr_allocator(&mut self, allocator_name: String, allocator: Box<AddrResourceAllocator>) -> Result<()> {
+        if self.addr_alloc.contains_key(&allocator_name) {
+            return Err(Error::Exist);
         }
+        self.addr_alloc.insert(allocator_name, allocator);
+        Ok(())
     }
 
-    /// Reserves a section of `size` bytes of MMIO address space.
-    pub fn allocate_mmio_addresses(
-        &mut self,
-        address: Option<GuestAddress>,
-        size: GuestUsize,
-    ) -> Result<GuestAddress> {
-        self.mmio_address_space
-            .lock()
-            .expect("failed to acquire lock")
-            .allocate(address, size)
-            .map_err(Error::AllocateMmioAddress)
-    }
-
-    /// Free an IO address range.
-    /// We can only free a range if it matches exactly an already allocated range.
-    pub fn free_io_addresses(&mut self, address: GuestAddress, size: GuestUsize) {
-        if let Some(io_address) = self
-            .io_address_space
-            .lock()
-            .expect("failed to acquire lock")
-            .as_mut()
-        {
-            io_address.free(address, size)
+    pub fn add_id_allocator(&mut self, allocator_name: String, allocator: Box<IdResourceAllocator>) -> Result<()> {
+        if self.id_alloc.contains_key(&allocator_name) {
+            return Err(Error::Exist);
         }
+        self.id_alloc.insert(allocator_name, allocator);
+        Ok(())
     }
 
-    /// Free an MMIO address range.
-    /// We can only free a range if it matches exactly an already allocated range.
-    pub fn free_mmio_addresses(&mut self, address: GuestAddress, size: GuestUsize) {
-        self.mmio_address_space
-            .lock()
-            .expect("failed to acquire lock")
-            .free(address, size)
+    pub fn allocate_id(&mut self, _allocator_id: String) -> Result<Box<Resource<V = u32>>> {
+
+        Ok(Box::new(Id(10)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::system::{Error, SystemAllocator};
+    use crate::id::{Id, IdAllocator};
+    use crate::resource::IdResourceAllocator;
+
+    #[test]
+    fn test_allocate() -> Result<(), Error> {
+        let mut sys = SystemAllocator::new();
+        let id_allocator = IdAllocator::new(Id(1), Id(100)).ok_or(Error::Exist)?;
+        let id_name = id_allocator.name();
+        sys.add_id_allocator(id_name.clone(), Box::new(id_allocator))?;
+
+        // Use sys to allocate an id
+        let id = sys.allocate_id(id_name.clone())?;
+        assert_eq!(id.raw_value(), 10);
+        Ok(())
     }
 }

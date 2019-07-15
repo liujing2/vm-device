@@ -6,7 +6,7 @@
 // found in the LICENSE-BSD-3-Clause file.
 //
 // SPDX-License-Identifier: Apache-2.0 OR BSD-3-Clause
-#![deny(missing_docs)]
+//#![deny(missing_docs)]
 
 //! Manages system resources that can be allocated to VMs and their devices.
 
@@ -14,8 +14,9 @@ extern crate libc;
 
 mod address;
 mod id;
+mod resource;
 mod system;
 
 pub use crate::address::AddressAllocator;
-pub use crate::id::IdAllocator;
+pub use crate::id::{Id, IdAllocator};
 pub use crate::system::{Error, SystemAllocator};

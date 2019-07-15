@@ -7,30 +7,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR BSD-3-Clause
 
-use std::fmt::{self, Display};
 use std::result;
 
-#[derive(Debug)]
-pub enum Error {
-    Invalid,
-    Overflow,
-    Duplicated,
-}
-
-impl Display for Error {
-    // This trait requires `fmt` with this exact signature.
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use self::Error::*;
-
-        match self {
-            Invalid => write!(f, "Integer being allocated is out of scope"),
-            Overflow => write!(f, "Integer being allocated is overflow"),
-            Duplicated => write!(f, "Integer being allocated is duplicated"),
-        }
-    }
-}
+use crate::resource::*;
 
 pub type Result<T> = result::Result<T, Error>;
+
+/// Id
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct Id(pub u32);
+
+
+impl Resource for Id {
+    type V = u32;
+
+    fn name(&self) -> String {
+        "id".to_string().clone()
+    }
+
+    fn raw_value(&self) -> u32 {
+        self.0
+    }
+}
 
 /// Manages allocating unsigned integer resources.
 /// Use `IdAllocator` whenever a unique unsigned 32-bit number needs to be allocated.
@@ -53,14 +51,14 @@ pub type Result<T> = result::Result<T, Error>;
 /// ```
 #[derive(Debug)]
 pub struct IdAllocator {
-    start: u32,
-    end: u32,
-    used: Vec<u32>,
+    start: Id,
+    end: Id,
+    used: Vec<Id>,
 }
 
 impl IdAllocator {
     /// Creates a new `IdAllocator` for managing a range of unsigned integer.
-    pub fn new(start: u32, end: u32) -> Option<Self> {
+    pub fn new(start: Id, end: Id) -> Option<Self> {
         Some(IdAllocator {
             start,
             end,
@@ -68,56 +66,66 @@ impl IdAllocator {
         })
     }
 
-    fn first_usable_number(&self) -> Option<u32> {
+    fn first_usable_number(&self) -> Result<Id> {
         if self.used.is_empty() {
-            return Some(self.start);
+            return Ok(self.start);
         }
 
         let mut previous = self.start;
 
         for iter in self.used.iter() {
             if *iter > previous {
-                return Some(previous);
+                return Ok(previous);
             } else {
-                match iter.checked_add(1) {
-                    Some(p) => previous = p,
-                    None => return None,
+                match iter.0.checked_add(1) {
+                    Some(p) => previous = Id(p),
+                    None => return Err(Error::Overflow),
                 }
             }
         }
         if previous <= self.end {
-            Some(previous)
+            Ok(previous)
         } else {
-            None
+            Err(Error::Overflow)
         }
     }
+}
 
-    /// Allocates a number from the managed region. Returns `Ok(allocated_id)`
-    /// when successful, or Error indicates the failure reason.
-    pub fn allocate(&mut self, number: Option<u32>) -> Result<u32> {
-        let new = match number {
-            // Specified number to be allocated.
-            Some(num) => {
-                if num < self.start || num > self.end {
+impl IdResourceAllocator for IdAllocator {
+    fn name(&self) -> String {
+        "id".to_string().clone()
+    }
+
+    fn allocate(&mut self, resource: Option<Box<Resource<V=u32>>>) -> Result<Box<Resource<V=u32>>> {
+        let ret = match resource {
+            // Specified resource to be allocated.
+            Some(res) => {
+                // Check resource request type.
+                if res.name() != self.name() {
                     return Err(Error::Invalid);
                 }
-                match self.used.iter().find(|&&x| x == num) {
+                let value = res.raw_value() as u32;
+
+                if value < self.start.raw_value() || value > self.end.raw_value() {
+                    return Err(Error::OutofScope);
+                }
+                match self.used.iter().find(|&&x| x.raw_value() == value) {
                     Some(_) => {
                         return Err(Error::Duplicated);
                     }
-                    None => num,
+                    None => Id(value),
                 }
             }
-            None => self.first_usable_number().ok_or(Error::Overflow)?,
+            None => self.first_usable_number()?,
         };
-        self.used.push(new);
+        self.used.push(ret);
         self.used.sort();
-        Ok(new)
+        Ok(Box::new(ret))
     }
 
     /// Free an already allocated id and will keep the order.
-    pub fn free(&mut self, number: u32) {
-        if let Ok(idx) = self.used.binary_search(&number) {
+    fn free(&mut self, res: Box<Resource<V=u32>>) {
+        if let Ok(idx) = self.used.binary_search(&Id(res.raw_value())) {
             self.used.remove(idx);
         }
     }
